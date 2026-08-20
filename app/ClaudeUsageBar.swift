@@ -285,17 +285,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let sparkIcon = createSparkIcon(color: color)
         button.image = sparkIcon
 
-        // The title always leads with the session percentage (the number users
-        // track moment-to-moment, paired with its own reset countdown) so that
-        // info is never hidden. The weekly/weekly-Sonnet percentage is appended,
-        // marked "W", only when it's the more urgent, binding constraint — this
-        // surfaces a lurking weekly block without ever replacing the session info.
+        // The title always leads with the session percentage immediately followed
+        // by its own reset countdown, so the two clearly read as a pair (e.g.
+        // "7% · 4h29") and it's unambiguous which number the countdown belongs to.
+        // The weekly/weekly-Sonnet percentage, marked "W", is appended last — only
+        // when it's the more urgent, binding constraint — as a separate warning
+        // rather than something the countdown could be mistaken for describing.
         var title = " \(sessionPercentage ?? percentage)%"
-        if isWeeklyDriven {
-            title += " · \(percentage)%W"
-        }
         if let timeRemaining = timeRemaining {
             title += " · \(timeRemaining)"
+        }
+        if isWeeklyDriven {
+            title += " · \(percentage)%W"
         }
         button.title = title
     }
