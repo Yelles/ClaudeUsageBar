@@ -1735,7 +1735,7 @@ struct UsageView: View {
                             .fontWeight(.semibold)
                         Spacer()
                         Button(action: {
-                            NSWorkspace.shared.open(URL(string: "https://github.com/Artzainnn/ClaudeUsageBar/blob/main/setup-guide.png")!)
+                            NSWorkspace.shared.open(URL(string: "https://github.com/Yelles/ClaudeUsageBar/blob/main/setup-guide.png")!)
                         }) {
                             Text("View tutorial →")
                                 .font(.caption2)
@@ -1794,19 +1794,6 @@ struct UsageView: View {
                 .background(Color.secondary.opacity(0.1))
                 .cornerRadius(6)
             }
-
-            // Support Section
-            Button(action: {
-                NSWorkspace.shared.open(URL(string: "https://donate.stripe.com/3cIcN5b5H7Q8ay8bIDfIs02")!)
-            }) {
-                HStack(spacing: 4) {
-                    Text("☕")
-                    Text("Buy Dev a Coffee")
-                }
-            }
-            .buttonStyle(.borderless)
-            .font(.caption)
-            .foregroundColor(.orange)
 
             // Settings Section
             Button(showingSettings ? "Hide Settings" : "Settings") {
