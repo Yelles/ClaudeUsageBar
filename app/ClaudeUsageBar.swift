@@ -319,9 +319,15 @@ class UsageManager: ObservableObject {
     @Published var weeklyLimit: Int = 100
     @Published var weeklySonnetUsage: Int = 0
     @Published var weeklySonnetLimit: Int = 100
+    @Published var weeklyDesignUsage: Int = 0
+    @Published var weeklyDesignLimit: Int = 100
+    @Published var weeklyFableUsage: Int = 0
+    @Published var weeklyFableLimit: Int = 100
     @Published var sessionResetsAt: Date?
     @Published var weeklyResetsAt: Date?
     @Published var weeklySonnetResetsAt: Date?
+    @Published var weeklyDesignResetsAt: Date?
+    @Published var weeklyFableResetsAt: Date?
     @Published var lastUpdated: Date = Date()
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
@@ -329,6 +335,8 @@ class UsageManager: ObservableObject {
     @Published var statusNotificationsEnabled: Bool = true
     @Published var openAtLogin: Bool = false
     @Published var hasWeeklySonnet: Bool = false
+    @Published var hasWeeklyDesign: Bool = false
+    @Published var hasWeeklyFable: Bool = false
     @Published var hasFetchedData: Bool = false
     @Published var isAccessibilityEnabled: Bool = false
     @Published var shortcutEnabled: Bool = true
@@ -416,11 +424,17 @@ class UsageManager: ObservableObject {
         sessionUsage = 0
         weeklyUsage = 0
         weeklySonnetUsage = 0
+        weeklyDesignUsage = 0
+        weeklyFableUsage = 0
         sessionResetsAt = nil
         weeklyResetsAt = nil
         weeklySonnetResetsAt = nil
+        weeklyDesignResetsAt = nil
+        weeklyFableResetsAt = nil
         hasFetchedData = false
         hasWeeklySonnet = false
+        hasWeeklyDesign = false
+        hasWeeklyFable = false
         errorMessage = nil
         lastNotifiedThreshold = 0
         UserDefaults.standard.set(0, forKey: "last_notified_threshold")
@@ -620,8 +634,66 @@ class UsageManager: ObservableObject {
                 hasWeeklySonnet = false
             }
 
+            // Check for seven_day_omelette (Claude Design — plan-dependent, separate bucket).
+            // "omelette" is Anthropic's internal codename for Claude Design (the design
+            // assistant at claude.ai/design). Its usage is tracked in its own weekly window,
+            // independent from seven_day / seven_day_sonnet / five_hour.
+            if let sevenDayDesign = json["seven_day_omelette"] as? [String: Any] {
+                hasWeeklyDesign = true
+                if let designUtil = sevenDayDesign["utilization"] as? Double {
+                    weeklyDesignUsage = Int(designUtil)
+                    weeklyDesignLimit = 100
+                }
+                if let resetsAtString = sevenDayDesign["resets_at"] as? String {
+                    NSLog("🕐 Weekly Design resets_at string: \(resetsAtString)")
+                    if let resetsAt = iso8601Formatter.date(from: resetsAtString) {
+                        weeklyDesignResetsAt = resetsAt
+                        NSLog("✅ Parsed weekly Design reset time: \(resetsAt)")
+                    } else {
+                        NSLog("❌ Failed to parse weekly Design reset time")
+                    }
+                } else {
+                    // resets_at is null until first Claude Design use — keep nil
+                    weeklyDesignResetsAt = nil
+                }
+            } else {
+                hasWeeklyDesign = false
+            }
+
+            // Fable is a new, separately-counted model. It isn't a top-level
+            // key like seven_day_sonnet — it lives in the `limits` array as a
+            // model-scoped weekly limit (scope.model.display_name == "Fable").
+            // The bar is only surfaced in the UI when usage is above 1%.
+            hasWeeklyFable = false
+            if let limits = json["limits"] as? [[String: Any]] {
+                let fableLimit = limits.first { entry in
+                    let scope = entry["scope"] as? [String: Any]
+                    let model = scope?["model"] as? [String: Any]
+                    return (model?["display_name"] as? String) == "Fable"
+                }
+                if let fable = fableLimit {
+                    hasWeeklyFable = true
+                    // `percent` may decode as Int or Double depending on payload.
+                    if let p = fable["percent"] as? Int {
+                        weeklyFableUsage = p
+                    } else if let p = fable["percent"] as? Double {
+                        weeklyFableUsage = Int(p)
+                    }
+                    weeklyFableLimit = 100
+                    if let resetsAtString = fable["resets_at"] as? String {
+                        NSLog("🕐 Weekly Fable resets_at string: \(resetsAtString)")
+                        if let resetsAt = iso8601Formatter.date(from: resetsAtString) {
+                            weeklyFableResetsAt = resetsAt
+                            NSLog("✅ Parsed weekly Fable reset time: \(resetsAt)")
+                        } else {
+                            NSLog("❌ Failed to parse weekly Fable reset time")
+                        }
+                    }
+                }
+            }
+
             // Log what we found
-            NSLog("✅ Parsed: Session \(sessionUsage)%, Weekly \(weeklyUsage)%\(hasWeeklySonnet ? ", Weekly Sonnet \(weeklySonnetUsage)%" : "")")
+            NSLog("✅ Parsed: Session \(sessionUsage)%, Weekly \(weeklyUsage)%\(hasWeeklySonnet ? ", Weekly Sonnet \(weeklySonnetUsage)%" : "")\(hasWeeklyDesign ? ", Weekly Design \(weeklyDesignUsage)%" : "")\(hasWeeklyFable ? ", Weekly Fable \(weeklyFableUsage)%" : "")")
 
             lastUpdated = Date()
             errorMessage = nil
@@ -701,11 +773,15 @@ class UsageManager: ObservableObject {
     @Published var sessionPercentage: Double = 0.0
     @Published var weeklyPercentage: Double = 0.0
     @Published var weeklySonnetPercentage: Double = 0.0
+    @Published var weeklyDesignPercentage: Double = 0.0
+    @Published var weeklyFablePercentage: Double = 0.0
 
     func updatePercentages() {
         sessionPercentage = Double(sessionUsage) / Double(sessionLimit)
         weeklyPercentage = Double(weeklyUsage) / Double(weeklyLimit)
         weeklySonnetPercentage = Double(weeklySonnetUsage) / Double(weeklySonnetLimit)
+        weeklyDesignPercentage = Double(weeklyDesignUsage) / Double(weeklyDesignLimit)
+        weeklyFablePercentage = Double(weeklyFableUsage) / Double(weeklyFableLimit)
     }
 }
 
@@ -1356,6 +1432,57 @@ struct UsageView: View {
                         .tint(colorForPercentage(usageManager.weeklySonnetPercentage))
 
                     Text("\(Int(usageManager.weeklySonnetPercentage * 100))% used")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            // Claude Design Usage (only show if available — plan-dependent)
+            if usageManager.hasWeeklyDesign && usageManager.hasFetchedData {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Claude Design (7 day)")
+                            .font(.subheadline)
+                        Spacer()
+                        if let resetTime = usageManager.weeklyDesignResetsAt {
+                            Text("Resets \(formatResetTime(resetTime, includeDate: true))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Not started yet")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    ProgressView(value: usageManager.weeklyDesignPercentage)
+                        .tint(colorForPercentage(usageManager.weeklyDesignPercentage))
+
+                    Text("\(Int(usageManager.weeklyDesignPercentage * 100))% used")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            // Weekly Fable Usage — only surfaced once usage is above 1%
+            // (new model, counted separately; hidden while idle to avoid clutter).
+            if usageManager.hasWeeklyFable && usageManager.hasFetchedData && usageManager.weeklyFableUsage >= 1 {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Weekly Fable (7 day)")
+                            .font(.subheadline)
+                        Spacer()
+                        if let resetTime = usageManager.weeklyFableResetsAt {
+                            Text("Resets \(formatResetTime(resetTime, includeDate: true))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    ProgressView(value: usageManager.weeklyFablePercentage)
+                        .tint(colorForPercentage(usageManager.weeklyFablePercentage))
+
+                    Text("\(Int(usageManager.weeklyFablePercentage * 100))% used")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
