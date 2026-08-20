@@ -267,10 +267,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func updateStatusIcon(percentage: Int, timeRemaining: String? = nil, isWeeklyDriven: Bool = false) {
+    func updateStatusIcon(percentage: Int, sessionPercentage: Int? = nil, timeRemaining: String? = nil, isWeeklyDriven: Bool = false) {
         guard let button = statusItem.button else { return }
 
-        // Determine color based on percentage
+        // Determine color based on the effective (worst-case) percentage, so the
+        // color always reflects whether you're actually close to being blocked.
         let color: NSColor
         if percentage < 70 {
             color = NSColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0) // Green
@@ -282,18 +283,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create spark icon with color
         let sparkIcon = createSparkIcon(color: color)
-
-        // Set image and title. When the weekly (or weekly-Sonnet) limit is the one
-        // driving the shown percentage — i.e. it's higher than the session limit —
-        // append "W" so a glance at the menu bar doesn't read as "session usage is
-        // low, I can chat" when it's actually the weekly limit that's blocking you.
-        let suffix = isWeeklyDriven ? "W" : ""
         button.image = sparkIcon
-        if let timeRemaining = timeRemaining {
-            button.title = " \(percentage)%\(suffix) · \(timeRemaining)"
-        } else {
-            button.title = " \(percentage)%\(suffix)"
+
+        // The title always leads with the session percentage (the number users
+        // track moment-to-moment, paired with its own reset countdown) so that
+        // info is never hidden. The weekly/weekly-Sonnet percentage is appended,
+        // marked "W", only when it's the more urgent, binding constraint — this
+        // surfaces a lurking weekly block without ever replacing the session info.
+        var title = " \(sessionPercentage ?? percentage)%"
+        if isWeeklyDriven {
+            title += " · \(percentage)%W"
         }
+        if let timeRemaining = timeRemaining {
+            title += " · \(timeRemaining)"
+        }
+        button.title = title
     }
 
     func createSparkIcon(color: NSColor) -> NSImage {
@@ -872,34 +876,33 @@ class UsageManager: ObservableObject {
         let weeklyPercent = Int((Double(weeklyUsage) / Double(weeklyLimit)) * 100)
         let weeklySonnetPercent = hasWeeklySonnet ? Int((Double(weeklySonnetUsage) / Double(weeklySonnetLimit)) * 100) : 0
 
-        // The menu bar must reflect whichever limit is actually blocking usage right
-        // now, not just the session (5h) window. Otherwise, once the session resets
-        // to 0% while the weekly limit is still exhausted, the menu bar reads "you
-        // can chat" when you actually can't — take the max across every limit that
-        // gates core Claude chat (session, weekly, weekly-Sonnet). Weekly Design and
-        // Weekly Fable are excluded: they're separate product/model buckets that
-        // don't block ordinary Claude chat when exhausted.
+        // The icon color/urgency must reflect whichever limit is actually blocking
+        // usage right now, not just the session (5h) window. Otherwise, once the
+        // session resets to 0% while the weekly limit is still exhausted, the menu
+        // bar reads "you can chat" when you actually can't — take the max across
+        // every limit that gates core Claude chat (session, weekly, weekly-Sonnet).
+        // Weekly Design and Weekly Fable are excluded: they're separate
+        // product/model buckets that don't block ordinary Claude chat when
+        // exhausted. The session percentage and its own reset countdown always
+        // stay visible in the title (see updateStatusIcon) — only the icon color
+        // and the extra "NN%W" number reflect the worst-case limit, so a lurking
+        // weekly block is surfaced without ever hiding your session status.
         var effectivePercent = sessionPercent
-        var effectiveResetsAt = sessionResetsAt
         var isWeeklyDriven = false
         if weeklyPercent > effectivePercent {
             effectivePercent = weeklyPercent
-            effectiveResetsAt = weeklyResetsAt
             isWeeklyDriven = true
         }
         if hasWeeklySonnet && weeklySonnetPercent > effectivePercent {
             effectivePercent = weeklySonnetPercent
-            effectiveResetsAt = weeklySonnetResetsAt
             isWeeklyDriven = true
         }
 
-        // Update the icon color (and optionally the time remaining until the
-        // *binding* limit resets — not always the session's).
-        let timeRemaining = showSessionTimeInMenuBar ? formatTimeUntilReset(effectiveResetsAt) : nil
-        delegate?.updateStatusIcon(percentage: effectivePercent, timeRemaining: timeRemaining, isWeeklyDriven: isWeeklyDriven)
+        let timeRemaining = showSessionTimeInMenuBar ? formatTimeUntilReset(sessionResetsAt) : nil
+        delegate?.updateStatusIcon(percentage: effectivePercent, sessionPercentage: sessionPercent, timeRemaining: timeRemaining, isWeeklyDriven: isWeeklyDriven)
 
-        // Check for notification thresholds against the same effective percentage,
-        // so hitting the weekly limit notifies even if the session is still at 0%.
+        // Check for notification thresholds against the effective percentage, so
+        // hitting the weekly limit notifies even if the session is still at 0%.
         checkNotificationThresholds(percentage: effectivePercent)
     }
 
