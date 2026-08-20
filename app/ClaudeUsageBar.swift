@@ -258,7 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func updateStatusIcon(percentage: Int, sessionPercentage: Int? = nil, timeRemaining: String? = nil, isWeeklyDriven: Bool = false) {
+    func updateStatusIcon(percentage: Int, sessionPercentage: Int? = nil, timeRemaining: String? = nil, isWeeklyDriven: Bool = false, hideSessionNumber: Bool = false) {
         guard let button = statusItem.button else { return }
 
         // Determine color based on the effective (worst-case) percentage, so the
@@ -276,17 +276,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let sparkIcon = createSparkIcon(color: color)
         button.image = sparkIcon
 
-        // The title always leads with the session percentage immediately followed
-        // by its own reset countdown, so the two clearly read as a pair (e.g.
-        // "7% · 4h29") and it's unambiguous which number the countdown belongs to.
-        // The weekly/weekly-Sonnet percentage, marked "W", is appended last — only
-        // when it's the more urgent, binding constraint — as a separate warning
-        // rather than something the countdown could be mistaken for describing.
-        var title = " \(sessionPercentage ?? percentage)%"
+        // Once the weekly (or weekly-Sonnet) limit is fully exhausted, you're
+        // blocked no matter what the session shows — even a freshly-reset session
+        // won't let you chat until the weekly window resets. At that point the
+        // session % and countdown would only mislead, so collapse to just the
+        // binding percentage and its own reset time.
+        var title: String
+        if hideSessionNumber {
+            title = " \(percentage)%W"
+        } else {
+            // Lead with the session percentage immediately followed by its own
+            // reset countdown, so the two clearly read as a pair (e.g. "7% ·
+            // 4h29"). The weekly/weekly-Sonnet percentage, marked "W", is appended
+            // last — only when it's the more urgent, binding constraint — as a
+            // separate warning rather than something the countdown could be
+            // mistaken for describing.
+            title = " \(sessionPercentage ?? percentage)%"
+        }
         if let timeRemaining = timeRemaining {
             title += " · \(timeRemaining)"
         }
-        if isWeeklyDriven {
+        if isWeeklyDriven && !hideSessionNumber {
             title += " · \(percentage)%W"
         }
         button.title = title
@@ -843,22 +853,39 @@ class UsageManager: ObservableObject {
         // Weekly Fable is excluded: it's a separate model bucket that doesn't
         // block ordinary Claude chat when exhausted. The session percentage and
         // its own reset countdown always stay visible in the title (see
-        // updateStatusIcon) — only the icon color
-        // and the extra "NN%W" number reflect the worst-case limit, so a lurking
-        // weekly block is surfaced without ever hiding your session status.
+        // updateStatusIcon) — only the icon color and the extra "NN%W" number
+        // reflect the worst-case limit, so a lurking weekly block is surfaced
+        // without ever hiding your session status. Ties favor the weekly side
+        // (>=, not >): if session and weekly are exactly equal, resetting the
+        // session alone wouldn't unblock you, so it's still weekly-driven.
         var effectivePercent = sessionPercent
         var isWeeklyDriven = false
-        if weeklyPercent > effectivePercent {
+        var bindingResetsAt = sessionResetsAt
+        if weeklyPercent >= effectivePercent {
             effectivePercent = weeklyPercent
             isWeeklyDriven = true
+            bindingResetsAt = weeklyResetsAt
         }
-        if hasWeeklySonnet && weeklySonnetPercent > effectivePercent {
+        if hasWeeklySonnet && weeklySonnetPercent >= effectivePercent {
             effectivePercent = weeklySonnetPercent
             isWeeklyDriven = true
+            bindingResetsAt = weeklySonnetResetsAt
         }
 
-        let timeRemaining = showSessionTimeInMenuBar ? formatTimeUntilReset(sessionResetsAt) : nil
-        delegate?.updateStatusIcon(percentage: effectivePercent, sessionPercentage: sessionPercent, timeRemaining: timeRemaining, isWeeklyDriven: isWeeklyDriven)
+        // Once the binding weekly limit is fully exhausted, session info is no
+        // longer just secondary — it's actively misleading (you're blocked no
+        // matter what it says), so drop it entirely and show only the binding
+        // percentage with its own reset countdown.
+        let isFullyBlockedByWeekly = isWeeklyDriven && effectivePercent >= 100
+        let resetsAtToShow = isFullyBlockedByWeekly ? bindingResetsAt : sessionResetsAt
+        let timeRemaining = showSessionTimeInMenuBar ? formatTimeUntilReset(resetsAtToShow) : nil
+        delegate?.updateStatusIcon(
+            percentage: effectivePercent,
+            sessionPercentage: sessionPercent,
+            timeRemaining: timeRemaining,
+            isWeeklyDriven: isWeeklyDriven,
+            hideSessionNumber: isFullyBlockedByWeekly
+        )
 
         // Check for notification thresholds against the effective percentage, so
         // hitting the weekly limit notifies even if the session is still at 0%.
