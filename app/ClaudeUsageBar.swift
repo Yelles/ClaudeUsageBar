@@ -10,7 +10,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var popover: NSPopover!
     var usageManager: UsageManager!
     var statusManager: StatusManager!
-    var updateManager: UpdateManager!
     var eventMonitor: Any?
     var hotKeyRef: EventHotKeyRef?
 
@@ -36,7 +35,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize managers
         usageManager = UsageManager(statusItem: statusItem, delegate: self)
         statusManager = StatusManager()
-        updateManager = UpdateManager()
 
         // Create popover
         popover = NSPopover()
@@ -45,14 +43,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: UsageView(
             usageManager: usageManager,
-            statusManager: statusManager,
-            updateManager: updateManager
+            statusManager: statusManager
         ))
 
         // Fetch initial data
         usageManager.fetchUsage()
         statusManager.fetch()
-        updateManager.fetch()
 
         // Usage + Anthropic status are time-sensitive — poll every 5 min.
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
@@ -80,11 +76,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("⏰ Mac woke from sleep — refetching usage and status")
             self?.usageManager.fetchUsage()
             self?.statusManager.fetch()
-        }
-
-        // App updates are infrequent (new release at most weekly) — poll every 3 hours.
-        Timer.scheduledTimer(withTimeInterval: 3 * 3600, repeats: true) { _ in
-            self.updateManager.fetch()
         }
 
         // Set up Cmd+U keyboard shortcut
@@ -1165,139 +1156,6 @@ class StatusManager: ObservableObject {
     }
 }
 
-// MARK: - App Updates
-
-struct BannerButton: Equatable {
-    let label: String
-    let url: URL?         // optional — opens this URL (validated)
-    let action: String?   // "dismiss" closes the banner; nil = no extra side effect
-    let style: String?    // "primary" | "secondary" | nil
-}
-
-struct AvailableUpdate: Equatable {
-    let version: String
-    let title: String
-    let body: String
-    let buttons: [BannerButton]
-}
-
-class UpdateManager: ObservableObject {
-    @Published var available: AvailableUpdate?
-
-    // Served directly from the repo via GitHub — free, unlimited, no Vercel meter.
-    // Same file as website/latest.json so existing v1.1 users on Vercel see the same JSON.
-    private let endpoint = URL(string: "https://raw.githubusercontent.com/Artzainnn/ClaudeUsageBar/main/website/latest.json")!
-
-    var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
-
-    private static let allowedHostSuffixes = [
-        "github.com",
-        "claudeusagebar.com"
-    ]
-
-    static func isSafeURL(_ url: URL) -> Bool {
-        guard url.scheme == "https" else { return false }
-        guard let host = url.host?.lowercased() else { return false }
-        return allowedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) })
-    }
-
-    private static func parseButtons(from json: [String: Any]) -> [BannerButton] {
-        // Explicit `buttons` array (new schema, supports any combination)
-        if let raw = json["buttons"] as? [[String: Any]] {
-            return raw.compactMap { dict -> BannerButton? in
-                guard let label = dict["label"] as? String, !label.isEmpty else { return nil }
-                let urlStr = dict["url"] as? String
-                let url = urlStr.flatMap { URL(string: $0) }
-                if let url = url, !isSafeURL(url) { return nil }   // reject unsafe URLs
-                return BannerButton(
-                    label: label,
-                    url: url,
-                    action: dict["action"] as? String,
-                    style: dict["style"] as? String
-                )
-            }
-        }
-        // Back-compat: legacy `download_url` builds the default 2-button layout
-        if let urlStr = json["download_url"] as? String,
-           let url = URL(string: urlStr),
-           isSafeURL(url) {
-            return [
-                BannerButton(label: "Download", url: url, action: nil, style: "primary"),
-                BannerButton(label: "Later",    url: nil, action: "dismiss", style: nil)
-            ]
-        }
-        return []
-    }
-
-    func fetch() {
-        let request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-            guard let self = self,
-                  let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let version = json["version"] as? String,
-                  let title = json["title"] as? String,
-                  let body = json["description"] as? String else {
-                NSLog("⚠️ Update fetch failed or invalid payload")
-                return
-            }
-
-            let buttons = Self.parseButtons(from: json)
-
-            DispatchQueue.main.async {
-                guard self.isNewer(remote: version, than: self.currentVersion) else {
-                    self.available = nil
-                    return
-                }
-
-                let update = AvailableUpdate(version: version, title: title, body: body, buttons: buttons)
-
-                if self.available != update {
-                    self.available = update
-                    NSLog("⬆️ Update available: \(version)")
-                }
-
-                let lastNotified = UserDefaults.standard.string(forKey: "last_notified_update_version")
-                // Update notifications fire regardless of usage/status toggles — they're
-                // version-once and tied to user-initiated upgrade flow, not noise.
-                if lastNotified != version {
-                    let n = NSUserNotification()
-                    n.title = "ClaudeUsageBar \(version) is available"
-                    n.informativeText = title
-                    n.soundName = NSUserNotificationDefaultSoundName
-                    NSUserNotificationCenter.default.deliver(n)
-                    UserDefaults.standard.set(version, forKey: "last_notified_update_version")
-                    NSLog("📬 Sent update notification for \(version)")
-                }
-            }
-        }.resume()
-    }
-
-    func dismissCurrent() {
-        if let v = available?.version {
-            UserDefaults.standard.set(v, forKey: "dismissed_update_version")
-        }
-        available = nil
-    }
-
-    var isCurrentDismissed: Bool {
-        guard let v = available?.version else { return false }
-        return UserDefaults.standard.string(forKey: "dismissed_update_version") == v
-    }
-
-    private func isNewer(remote: String, than current: String) -> Bool {
-        let r = remote.split(separator: ".").map { Int($0) ?? 0 }
-        let c = current.split(separator: ".").map { Int($0) ?? 0 }
-        for i in 0..<max(r.count, c.count) {
-            let a = i < r.count ? r[i] : 0
-            let b = i < c.count ? c[i] : 0
-            if a != b { return a > b }
-        }
-        return false
-    }
-}
 
 // Custom NSTextField that properly handles paste
 class CustomTextField: NSTextField {
@@ -1442,7 +1300,6 @@ private struct ContentHeightKey: PreferenceKey {
 struct UsageView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
-    @ObservedObject var updateManager: UpdateManager
     @State private var sessionCookieInput: String = ""
     @State private var showingCookieInput: Bool = false
     @State private var showingSettings: Bool = false
@@ -1490,41 +1347,6 @@ struct UsageView: View {
             Text("Claude Usage")
                 .font(.headline)
                 .padding(.bottom, 4)
-
-            // App update / announcement banner
-            if let update = updateManager.available, !updateManager.isCurrentDismissed {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text("⬆️")
-                        Text("Version \(update.version) available")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Button(action: { updateManager.dismissCurrent() }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    Text(update.title)
-                        .font(.caption)
-                    Text(update.body)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !update.buttons.isEmpty {
-                        HStack(spacing: 6) {
-                            ForEach(update.buttons.indices, id: \.self) { i in
-                                bannerButton(update.buttons[i])
-                            }
-                        }
-                    }
-                }
-                .padding(8)
-                .background(Color.accentColor.opacity(0.12))
-                .cornerRadius(6)
-            }
 
             if let error = usageManager.errorMessage {
                 Text(error)
@@ -1866,7 +1688,6 @@ struct UsageView: View {
                 Button("Refresh") {
                     usageManager.fetchUsage()
                     statusManager.fetch()
-                    updateManager.fetch()
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -2220,27 +2041,6 @@ struct UsageView: View {
             return String(raw[..<paren.lowerBound])
         }
         return raw
-    }
-
-    @ViewBuilder
-    func bannerButton(_ btn: BannerButton) -> some View {
-        let tap = {
-            if let url = btn.url {
-                NSWorkspace.shared.open(url)
-            }
-            if btn.action == "dismiss" {
-                updateManager.dismissCurrent()
-            }
-        }
-        if btn.style == "primary" {
-            Button(btn.label, action: tap)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        } else {
-            Button(btn.label, action: tap)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-        }
     }
 
     func badgeColor(for status: String) -> Color {
