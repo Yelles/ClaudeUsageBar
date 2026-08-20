@@ -1439,9 +1439,18 @@ struct UsageView: View {
                         .font(.subheadline)
                     Spacer()
                     if let resetTime = usageManager.sessionResetsAt {
-                        Text("Resets \(formatResetTime(resetTime))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        if resetTime < Date() && usageManager.sessionUsage == 0 {
+                            // The 5h window from the last query has already expired and no
+                            // new query has started a new window — the displayed "Resets at"
+                            // would be in the past and misleading.
+                            Text("Inactive")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Resets \(formatResetTime(resetTime))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
