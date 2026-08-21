@@ -11,7 +11,7 @@ A lightweight, open-source macOS menu bar application that displays your Claude.
 
 ## 📥 Download
 
-**[Download Latest Release](https://github.com/Artzainnn/claudeusagebar/releases)** (DMG Installer)
+**[Download Latest Release](https://github.com/Yelles/ClaudeUsageBar/releases)** (DMG Installer)
 
 ## 📦 Set Up (1mn)
 
@@ -37,7 +37,7 @@ A lightweight, open-source macOS menu bar application that displays your Claude.
 
 ## 🚀 Quick Start
 
-1. **Download** `ClaudeUsageBar-Installer.dmg` from [Releases](https://github.com/Artzainnn/ClaudeUsageBar/releases)
+1. **Download** the DMG from [Releases](https://github.com/Yelles/ClaudeUsageBar/releases)
 2. **Open DMG** and drag ClaudeUsageBar to Applications folder
 3. **Launch** ClaudeUsageBar from Applications
 4. **Set cookie** from claude.ai (follow in-app instructions)
@@ -103,7 +103,7 @@ The built app will be in `app/build/ClaudeUsageBar.app`
 
 Contributions are welcome! Here's how you can help:
 
-- 🐛 Report bugs via [Issues](https://github.com/Artzainnn/claudeusagebar/issues)
+- 🐛 Report bugs via [Issues](https://github.com/Yelles/ClaudeUsageBar/issues)
 - 💡 Suggest features or improvements
 - 🔧 Submit pull requests
 - 📖 Improve documentation
@@ -126,8 +126,8 @@ If you find this useful, consider:
 ## 🔗 Links
 
 - **Website:** [claudeusagebar.com](https://claudeusagebar.com)
-- **Issues:** [GitHub Issues](https://github.com/Artzainnn/claudeusagebar/issues)
-- **Releases:** [GitHub Releases](https://github.com/Artzainnn/claudeusagebar/releases)
+- **Issues:** [GitHub Issues](https://github.com/Yelles/ClaudeUsageBar/issues)
+- **Releases:** [GitHub Releases](https://github.com/Yelles/ClaudeUsageBar/releases)
 
 ## 🔗 Other projects
 
