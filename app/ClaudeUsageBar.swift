@@ -3,6 +3,7 @@ import AppKit
 import WebKit
 import Carbon
 import ServiceManagement
+import Security
 
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -372,6 +373,54 @@ struct Main {
     }
 }
 
+// Stores the Claude session cookie in the macOS Keychain instead of
+// UserDefaults — UserDefaults persists to an unencrypted plist any local
+// process running as the same user can read; the Keychain doesn't.
+enum SessionCookieKeychain {
+    private static let service = "com.claude.usagebar"
+    private static let account = "claude_session_cookie"
+
+    static func save(_ value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+        var attributes = query
+        attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        if status != errSecSuccess {
+            NSLog("❌ Keychain save failed: OSStatus \(status)")
+        }
+    }
+
+    static func load() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func delete() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
 class UsageManager: ObservableObject {
     @Published var sessionUsage: Int = 0
     @Published var sessionLimit: Int = 100
@@ -411,7 +460,7 @@ class UsageManager: ObservableObject {
     @Published var alwaysShowWeeklyBadge: Bool = false
 
     private var statusItem: NSStatusItem?
-    private var sessionCookie: String = ""
+    private(set) var sessionCookie: String = ""
     private weak var delegate: AppDelegate?
     private var lastNotifiedThreshold: Int = 0
 
@@ -428,8 +477,19 @@ class UsageManager: ObservableObject {
     }
 
     func loadSessionCookie() {
-        if let savedCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
+        if let savedCookie = SessionCookieKeychain.load() {
             sessionCookie = savedCookie
+            return
+        }
+        // One-time migration: earlier versions stored the cookie in plaintext
+        // UserDefaults. If found there, move it into the Keychain and remove
+        // the plaintext copy so existing users don't have to re-paste it.
+        if let legacyCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
+            sessionCookie = legacyCookie
+            SessionCookieKeychain.save(legacyCookie)
+            UserDefaults.standard.removeObject(forKey: "claude_session_cookie")
+            UserDefaults.standard.synchronize()
+            NSLog("🔒 Migrated session cookie from UserDefaults to Keychain")
         }
     }
 
@@ -507,16 +567,14 @@ class UsageManager: ObservableObject {
     func saveSessionCookie(_ cookie: String) {
         NSLog("ClaudeUsage: Saving cookie, length: \(cookie.count)")
         sessionCookie = cookie
-        UserDefaults.standard.set(cookie, forKey: "claude_session_cookie")
-        UserDefaults.standard.synchronize()
+        SessionCookieKeychain.save(cookie)
         NSLog("ClaudeUsage: Cookie saved successfully")
     }
 
     func clearSessionCookie() {
         NSLog("ClaudeUsage: Clearing cookie")
         sessionCookie = ""
-        UserDefaults.standard.removeObject(forKey: "claude_session_cookie")
-        UserDefaults.standard.synchronize()
+        SessionCookieKeychain.delete()
 
         // Reset all data
         sessionUsage = 0
@@ -552,7 +610,7 @@ class UsageManager: ObservableObject {
             let trimmed = part.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("lastActiveOrg=") {
                 let orgId = trimmed.replacingOccurrences(of: "lastActiveOrg=", with: "")
-                NSLog("📋 Found org ID in cookie: \(orgId)")
+                NSLog("📋 Found org ID in cookie")
                 completion(orgId)
                 return
             }
@@ -728,10 +786,6 @@ class UsageManager: ObservableObject {
                 }
 
                 NSLog("📡 Status: \(httpResponse.statusCode)")
-
-                if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                    NSLog("📦 Response: \(responseString)")
-                }
 
                 if httpResponse.statusCode == 200, let data = data {
                     self?.parseUsageData(data)
@@ -1467,8 +1521,8 @@ struct UsageView: View {
                 measuredHeight = value
             }
             .onAppear {
-                if let savedCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
-                    sessionCookieInput = String(savedCookie.prefix(20)) + "..."
+                if !usageManager.sessionCookie.isEmpty {
+                    sessionCookieInput = String(usageManager.sessionCookie.prefix(20)) + "..."
                 }
                 usageManager.updatePercentages()
             }
