@@ -1630,7 +1630,13 @@ struct UsageView: View {
                             .font(.caption)
                     }
                     if !update.body.isEmpty {
-                        Text(update.body)
+                        // Release notes are Markdown (headers, bullets, bold) —
+                        // render them properly instead of showing raw ** and ##.
+                        let rendered = (try? AttributedString(
+                            markdown: update.body,
+                            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+                        )) ?? AttributedString(update.body)
+                        Text(rendered)
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .lineLimit(4)
