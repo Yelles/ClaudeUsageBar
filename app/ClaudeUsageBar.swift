@@ -395,6 +395,11 @@ class UsageManager: ObservableObject {
     @Published var isAccessibilityEnabled: Bool = false
     @Published var shortcutEnabled: Bool = true
     @Published var showSessionTimeInMenuBar: Bool = false
+    // When false (default), the weekly/weekly-Sonnet "NN%W" badge only shows
+    // once it's actually approaching a limit (same 70% cutoff as the icon
+    // turning yellow) — otherwise it's just clutter on a low, non-driving
+    // number. When true, it's shown any time weekly is the higher number.
+    @Published var alwaysShowWeeklyBadge: Bool = false
 
     private var statusItem: NSStatusItem?
     private var sessionCookie: String = ""
@@ -458,6 +463,7 @@ class UsageManager: ObservableObject {
         }
 
         showSessionTimeInMenuBar = UserDefaults.standard.bool(forKey: "show_session_time_in_menubar")
+        alwaysShowWeeklyBadge = UserDefaults.standard.bool(forKey: "always_show_weekly_badge")
     }
 
     func saveSettings() {
@@ -466,6 +472,7 @@ class UsageManager: ObservableObject {
         UserDefaults.standard.set(openAtLogin, forKey: "open_at_login")
         UserDefaults.standard.set(shortcutEnabled, forKey: "shortcut_enabled")
         UserDefaults.standard.set(showSessionTimeInMenuBar, forKey: "show_session_time_in_menubar")
+        UserDefaults.standard.set(alwaysShowWeeklyBadge, forKey: "always_show_weekly_badge")
         UserDefaults.standard.synchronize()
     }
 
@@ -877,13 +884,21 @@ class UsageManager: ObservableObject {
         // matter what it says), so drop it entirely and show only the binding
         // percentage with its own reset countdown.
         let isFullyBlockedByWeekly = isWeeklyDriven && effectivePercent >= 100
+
+        // Below the "approaching a limit" threshold (the same 70% cutoff where
+        // the icon turns yellow), showing the weekly number too is just clutter
+        // — most of the time only the session % matters. Surface it once weekly
+        // actually gets close to being the real constraint, or always if the
+        // user opts in via Settings.
+        let showWeeklyBadge = isWeeklyDriven && (alwaysShowWeeklyBadge || effectivePercent >= 70)
+
         let resetsAtToShow = isFullyBlockedByWeekly ? bindingResetsAt : sessionResetsAt
         let timeRemaining = showSessionTimeInMenuBar ? formatTimeUntilReset(resetsAtToShow) : nil
         delegate?.updateStatusIcon(
             percentage: effectivePercent,
             sessionPercentage: sessionPercent,
             timeRemaining: timeRemaining,
-            isWeeklyDriven: isWeeklyDriven,
+            isWeeklyDriven: showWeeklyBadge,
             hideSessionNumber: isFullyBlockedByWeekly
         )
 
@@ -1834,6 +1849,25 @@ struct UsageView: View {
                             Text("Show Session Time in Menu Bar")
                                 .font(.caption)
                             Text("Display time remaining until the 5-hour session resets, next to the usage percentage")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+
+                    Toggle(isOn: Binding(
+                        get: { usageManager.alwaysShowWeeklyBadge },
+                        set: { newValue in
+                            usageManager.alwaysShowWeeklyBadge = newValue
+                            usageManager.saveSettings()
+                            usageManager.updateStatusBar()
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Always Show Weekly % in Menu Bar")
+                                .font(.caption)
+                            Text("By default the weekly number only appears once it's approaching a limit (70%+). Enable to always show it when it's higher than session.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
