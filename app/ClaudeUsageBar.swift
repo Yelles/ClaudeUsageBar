@@ -1506,6 +1506,32 @@ private struct ContentHeightKey: PreferenceKey {
     }
 }
 
+// A usage progress bar with an optional pace marker: a thin vertical tick
+// showing how far through the reset window you are, time-wise, so you can
+// compare "usage so far" (the fill) against "time elapsed so far" (the
+// tick) at a glance — fill past the tick means burning faster than a flat
+// pace would project; fill short of it means you have room to spare.
+struct PacedProgressBar: View {
+    let value: Double
+    let pace: Double?
+    let tint: Color
+
+    var body: some View {
+        ProgressView(value: value)
+            .tint(tint)
+            .overlay(
+                GeometryReader { geo in
+                    if let pace = pace {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.55))
+                            .frame(width: 1.5)
+                            .position(x: geo.size.width * CGFloat(pace), y: geo.size.height / 2)
+                    }
+                }
+            )
+    }
+}
+
 struct UsageView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
@@ -1637,8 +1663,11 @@ struct UsageView: View {
                     }
                 }
 
-                ProgressView(value: usageManager.sessionPercentage)
-                    .tint(colorForPercentage(usageManager.sessionPercentage))
+                PacedProgressBar(
+                    value: usageManager.sessionPercentage,
+                    pace: paceFraction(resetsAt: usageManager.sessionResetsAt, windowSeconds: 5 * 3600),
+                    tint: colorForPercentage(usageManager.sessionPercentage)
+                )
 
                 Text("\(Int(usageManager.sessionPercentage * 100))% used")
                     .font(.caption)
@@ -1658,8 +1687,11 @@ struct UsageView: View {
                     }
                 }
 
-                ProgressView(value: usageManager.weeklyPercentage)
-                    .tint(colorForPercentage(usageManager.weeklyPercentage))
+                PacedProgressBar(
+                    value: usageManager.weeklyPercentage,
+                    pace: paceFraction(resetsAt: usageManager.weeklyResetsAt, windowSeconds: 7 * 24 * 3600),
+                    tint: colorForPercentage(usageManager.weeklyPercentage)
+                )
 
                 Text("\(Int(usageManager.weeklyPercentage * 100))% used")
                     .font(.caption)
@@ -1680,8 +1712,11 @@ struct UsageView: View {
                         }
                     }
 
-                    ProgressView(value: usageManager.weeklySonnetPercentage)
-                        .tint(colorForPercentage(usageManager.weeklySonnetPercentage))
+                    PacedProgressBar(
+                        value: usageManager.weeklySonnetPercentage,
+                        pace: paceFraction(resetsAt: usageManager.weeklySonnetResetsAt, windowSeconds: 7 * 24 * 3600),
+                        tint: colorForPercentage(usageManager.weeklySonnetPercentage)
+                    )
 
                     Text("\(Int(usageManager.weeklySonnetPercentage * 100))% used")
                         .font(.caption)
@@ -1704,8 +1739,11 @@ struct UsageView: View {
                         }
                     }
 
-                    ProgressView(value: usageManager.weeklyFablePercentage)
-                        .tint(colorForPercentage(usageManager.weeklyFablePercentage))
+                    PacedProgressBar(
+                        value: usageManager.weeklyFablePercentage,
+                        pace: paceFraction(resetsAt: usageManager.weeklyFableResetsAt, windowSeconds: 7 * 24 * 3600),
+                        tint: colorForPercentage(usageManager.weeklyFablePercentage)
+                    )
 
                     Text("\(Int(usageManager.weeklyFablePercentage * 100))% used")
                         .font(.caption)
@@ -2241,6 +2279,15 @@ struct UsageView: View {
             formatter.dateStyle = .none
             return "at \(formatter.string(from: date))"
         }
+    }
+
+    // Fraction (0...1) of the reset window elapsed so far, time-wise —
+    // independent of actual usage. Used to draw the pace marker on a bar.
+    func paceFraction(resetsAt: Date?, windowSeconds: Double) -> Double? {
+        guard let resetsAt = resetsAt, windowSeconds > 0 else { return nil }
+        let remaining = resetsAt.timeIntervalSinceNow
+        let elapsed = windowSeconds - remaining
+        return max(0, min(1, elapsed / windowSeconds))
     }
 
     func colorForPercentage(_ percentage: Double) -> Color {
