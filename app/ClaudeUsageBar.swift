@@ -312,8 +312,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Anthropic status dot, tracked components only — disappears entirely
         // once everything you actually track is operational, so it only ever
-        // draws the eye when something's actually wrong.
-        if let statusManager = statusManager, statusManager.hasFetched {
+        // draws the eye when something's actually wrong. On by default;
+        // can be turned off in Settings.
+        if let usageManager = usageManager, usageManager.showStatusDotInMenuBar,
+           let statusManager = statusManager, statusManager.hasFetched {
             switch statusManager.effectiveIndicator {
             case "minor":   title += " 🟡"
             case "major":   title += " 🟠"
@@ -475,6 +477,10 @@ class UsageManager: ObservableObject {
     // lastActiveOrg value, then the /api/bootstrap endpoint) fails entirely.
     // Auto-detection is always tried first and is unaffected by this.
     @Published var manualOrgId: String = ""
+    // On by default: a colored dot in the menu bar when a tracked Anthropic
+    // component is degraded. Off just suppresses the dot — the icon color
+    // and everything else in the title are unaffected.
+    @Published var showStatusDotInMenuBar: Bool = true
 
     private var statusItem: NSStatusItem?
     private(set) var sessionCookie: String = ""
@@ -551,6 +557,11 @@ class UsageManager: ObservableObject {
         showSessionTimeInMenuBar = UserDefaults.standard.bool(forKey: "show_session_time_in_menubar")
         alwaysShowWeeklyBadge = UserDefaults.standard.bool(forKey: "always_show_weekly_badge")
         manualOrgId = UserDefaults.standard.string(forKey: "manual_org_id") ?? ""
+        if UserDefaults.standard.object(forKey: "show_status_dot_in_menubar") == nil {
+            showStatusDotInMenuBar = true
+        } else {
+            showStatusDotInMenuBar = UserDefaults.standard.bool(forKey: "show_status_dot_in_menubar")
+        }
     }
 
     func saveSettings() {
@@ -561,6 +572,7 @@ class UsageManager: ObservableObject {
         UserDefaults.standard.set(showSessionTimeInMenuBar, forKey: "show_session_time_in_menubar")
         UserDefaults.standard.set(alwaysShowWeeklyBadge, forKey: "always_show_weekly_badge")
         UserDefaults.standard.set(manualOrgId, forKey: "manual_org_id")
+        UserDefaults.standard.set(showStatusDotInMenuBar, forKey: "show_status_dot_in_menubar")
         UserDefaults.standard.synchronize()
     }
 
@@ -2144,6 +2156,25 @@ struct UsageView: View {
                             Text("Always Show Weekly % in Menu Bar")
                                 .font(.caption)
                             Text("By default the weekly number only appears once it's approaching a limit (70%+). Enable to always show it when it's higher than session.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+
+                    Toggle(isOn: Binding(
+                        get: { usageManager.showStatusDotInMenuBar },
+                        set: { newValue in
+                            usageManager.showStatusDotInMenuBar = newValue
+                            usageManager.saveSettings()
+                            usageManager.updateStatusBar()
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Status Dot in Menu Bar")
+                                .font(.caption)
+                            Text("Shows a colored dot (🟡🟠🔴) when a tracked Anthropic component is degraded. On by default.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
