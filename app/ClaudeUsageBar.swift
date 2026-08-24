@@ -458,6 +458,10 @@ class UsageManager: ObservableObject {
     // turning yellow) — otherwise it's just clutter on a low, non-driving
     // number. When true, it's shown any time weekly is the higher number.
     @Published var alwaysShowWeeklyBadge: Bool = false
+    // Fallback only: used when auto-detecting the org ID (from the cookie's
+    // lastActiveOrg value, then the /api/bootstrap endpoint) fails entirely.
+    // Auto-detection is always tried first and is unaffected by this.
+    @Published var manualOrgId: String = ""
 
     private var statusItem: NSStatusItem?
     private(set) var sessionCookie: String = ""
@@ -533,6 +537,7 @@ class UsageManager: ObservableObject {
 
         showSessionTimeInMenuBar = UserDefaults.standard.bool(forKey: "show_session_time_in_menubar")
         alwaysShowWeeklyBadge = UserDefaults.standard.bool(forKey: "always_show_weekly_badge")
+        manualOrgId = UserDefaults.standard.string(forKey: "manual_org_id") ?? ""
     }
 
     func saveSettings() {
@@ -542,6 +547,7 @@ class UsageManager: ObservableObject {
         UserDefaults.standard.set(shortcutEnabled, forKey: "shortcut_enabled")
         UserDefaults.standard.set(showSessionTimeInMenuBar, forKey: "show_session_time_in_menubar")
         UserDefaults.standard.set(alwaysShowWeeklyBadge, forKey: "always_show_weekly_badge")
+        UserDefaults.standard.set(manualOrgId, forKey: "manual_org_id")
         UserDefaults.standard.synchronize()
     }
 
@@ -618,7 +624,7 @@ class UsageManager: ObservableObject {
 
         // If not in cookie, fetch from bootstrap
         guard let url = URL(string: "https://claude.ai/api/bootstrap") else {
-            completion(nil)
+            completion(fallbackToManualOrgId())
             return
         }
 
@@ -628,18 +634,26 @@ class UsageManager: ObservableObject {
 
         NSLog("📡 Fetching bootstrap to get org ID...")
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let account = json["account"] as? [String: Any],
                   let lastActiveOrgId = account["lastActiveOrgId"] as? String else {
                 NSLog("❌ Could not parse org ID from bootstrap")
-                completion(nil)
+                completion(self?.fallbackToManualOrgId())
                 return
             }
             NSLog("✅ Got org ID from bootstrap: \(lastActiveOrgId)")
             completion(lastActiveOrgId)
         }.resume()
+    }
+
+    // Only used when both cookie-parsing and the /api/bootstrap call fail to
+    // find an org ID — auto-detection is always tried first.
+    private func fallbackToManualOrgId() -> String? {
+        guard !manualOrgId.isEmpty else { return nil }
+        NSLog("🔧 Using manually-entered org ID as fallback")
+        return manualOrgId
     }
 
     func fetchUsage() {
@@ -658,7 +672,7 @@ class UsageManager: ObservableObject {
         fetchOrganizationId { [weak self] orgId in
             guard let self = self, let orgId = orgId else {
                 DispatchQueue.main.async {
-                    self?.errorMessage = "Could not get org ID from cookie"
+                    self?.errorMessage = "Could not get org ID from cookie — you can enter it manually below"
                     self?.isLoading = false
                 }
                 return
@@ -1999,6 +2013,21 @@ struct UsageView: View {
                                 }
                             }
                         }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Organization ID (optional fallback)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        TextField("Only needed if auto-detection fails", text: Binding(
+                            get: { usageManager.manualOrgId },
+                            set: { newValue in
+                                usageManager.manualOrgId = newValue
+                                usageManager.saveSettings()
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption2)
                     }
                 }
                 .padding(8)
