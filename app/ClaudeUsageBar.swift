@@ -309,6 +309,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isWeeklyDriven && !hideSessionNumber {
             title += " · \(percentage)%W"
         }
+
+        // Anthropic status dot, tracked components only — disappears entirely
+        // once everything you actually track is operational, so it only ever
+        // draws the eye when something's actually wrong.
+        if let statusManager = statusManager, statusManager.hasFetched {
+            switch statusManager.effectiveIndicator {
+            case "minor":   title += " 🟡"
+            case "major":   title += " 🟠"
+            case "critical": title += " 🔴"
+            default: break   // "none" — nothing appended
+            }
+        }
+
         button.title = title
     }
 
