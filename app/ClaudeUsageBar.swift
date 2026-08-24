@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var popover: NSPopover!
     var usageManager: UsageManager!
     var statusManager: StatusManager!
+    var updateManager: UpdateManager!
     var eventMonitor: Any?
     var hotKeyRef: EventHotKeyRef?
 
@@ -35,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize managers
         usageManager = UsageManager(statusItem: statusItem, delegate: self)
         statusManager = StatusManager()
+        updateManager = UpdateManager()
 
         // Create popover
         popover = NSPopover()
@@ -43,12 +45,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: UsageView(
             usageManager: usageManager,
-            statusManager: statusManager
+            statusManager: statusManager,
+            updateManager: updateManager
         ))
 
         // Fetch initial data
         usageManager.fetchUsage()
         statusManager.fetch()
+        updateManager.fetch()
 
         // Usage + Anthropic status are time-sensitive — poll every 5 min.
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
@@ -76,6 +80,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("⏰ Mac woke from sleep — refetching usage and status")
             self?.usageManager.fetchUsage()
             self?.statusManager.fetch()
+        }
+
+        // App updates are infrequent — poll every 3 hours.
+        Timer.scheduledTimer(withTimeInterval: 3 * 3600, repeats: true) { _ in
+            self.updateManager.fetch()
         }
 
         // Set up Cmd+U keyboard shortcut
@@ -1198,6 +1207,96 @@ class StatusManager: ObservableObject {
     }
 }
 
+// MARK: - App Updates
+
+struct AvailableUpdate: Equatable {
+    let version: String
+    let title: String
+    let body: String
+    let releaseURL: URL
+}
+
+class UpdateManager: ObservableObject {
+    @Published var available: AvailableUpdate?
+
+    // GitHub's Releases API is the single source of truth — every `gh release
+    // create` on this repo becomes "latest" here automatically, no separate
+    // feed file to keep in sync.
+    private let endpoint = URL(string: "https://api.github.com/repos/Yelles/ClaudeUsageBar/releases/latest")!
+
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    func fetch() {
+        var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self = self,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String,
+                  let htmlURLString = json["html_url"] as? String,
+                  let releaseURL = URL(string: htmlURLString) else {
+                NSLog("⚠️ Update fetch failed or invalid payload")
+                return
+            }
+
+            let version = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+            let rawTitle = json["name"] as? String
+            let title = (rawTitle?.isEmpty == false) ? rawTitle ?? "" : "ClaudeUsageBar \(version)"
+            let body = (json["body"] as? String) ?? ""
+
+            DispatchQueue.main.async {
+                guard self.isNewer(remote: version, than: self.currentVersion) else {
+                    self.available = nil
+                    return
+                }
+
+                let update = AvailableUpdate(version: version, title: title, body: body, releaseURL: releaseURL)
+
+                if self.available != update {
+                    self.available = update
+                    NSLog("⬆️ Update available: \(version)")
+                }
+
+                let lastNotified = UserDefaults.standard.string(forKey: "last_notified_update_version")
+                if lastNotified != version {
+                    let n = NSUserNotification()
+                    n.title = "ClaudeUsageBar \(version) is available"
+                    n.informativeText = title
+                    n.soundName = NSUserNotificationDefaultSoundName
+                    NSUserNotificationCenter.default.deliver(n)
+                    UserDefaults.standard.set(version, forKey: "last_notified_update_version")
+                    NSLog("📬 Sent update notification for \(version)")
+                }
+            }
+        }.resume()
+    }
+
+    func dismissCurrent() {
+        if let v = available?.version {
+            UserDefaults.standard.set(v, forKey: "dismissed_update_version")
+        }
+        available = nil
+    }
+
+    var isCurrentDismissed: Bool {
+        guard let v = available?.version else { return false }
+        return UserDefaults.standard.string(forKey: "dismissed_update_version") == v
+    }
+
+    private func isNewer(remote: String, than current: String) -> Bool {
+        let r = remote.split(separator: ".").map { Int($0) ?? 0 }
+        let c = current.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(r.count, c.count) {
+            let a = i < r.count ? r[i] : 0
+            let b = i < c.count ? c[i] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+}
 
 // Custom NSTextField that properly handles paste
 class CustomTextField: NSTextField {
@@ -1342,6 +1441,7 @@ private struct ContentHeightKey: PreferenceKey {
 struct UsageView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
+    @ObservedObject var updateManager: UpdateManager
     @State private var sessionCookieInput: String = ""
     @State private var showingCookieInput: Bool = false
     @State private var showingSettings: Bool = false
@@ -1389,6 +1489,47 @@ struct UsageView: View {
             Text("Claude Usage")
                 .font(.headline)
                 .padding(.bottom, 4)
+
+            // App update banner
+            if let update = updateManager.available, !updateManager.isCurrentDismissed {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("⬆️")
+                        Text("Version \(update.version) available")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Button(action: { updateManager.dismissCurrent() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    if !update.title.isEmpty && update.title != "ClaudeUsageBar \(update.version)" {
+                        Text(update.title)
+                            .font(.caption)
+                    }
+                    if !update.body.isEmpty {
+                        Text(update.body)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button(action: {
+                        NSWorkspace.shared.open(update.releaseURL)
+                    }) {
+                        Text("View Release →")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(8)
+                .background(Color.accentColor.opacity(0.12))
+                .cornerRadius(6)
+            }
 
             if let error = usageManager.errorMessage {
                 Text(error)
@@ -1730,6 +1871,7 @@ struct UsageView: View {
                 Button("Refresh") {
                     usageManager.fetchUsage()
                     statusManager.fetch()
+                    updateManager.fetch()
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
